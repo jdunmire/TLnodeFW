@@ -1,3 +1,8 @@
+sensorNode - Firmware for the RockingDLabs SensorNode
+=====================================================
+Based on appTemplate, original README notes below.
+
+
 appTemplate - a starting point for ESP8266 applications
 =======================================================
 appTemplate serves as a framework for new ESP8266 applications. All the
