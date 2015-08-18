@@ -57,8 +57,8 @@ void ICACHE_FLASH_ATTR ds_init(int power)
     //disable pulldown
     PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO5_U, FUNC_GPIO5);
 
-    //enable pull up R
-    PIN_PULLDWN_DIS(PERIPHS_IO_MUX_GPIO5_U);
+    //enable pull up R - PIN_PULLDWN_DIS dropped in SDK v1.3.0
+    //PIN_PULLDWN_DIS(PERIPHS_IO_MUX_GPIO5_U);
 
     // Configure the GPIO with internal pull-up
     PIN_PULLUP_EN(PERIPHS_IO_MUX_GPIO5_U);
