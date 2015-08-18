@@ -15,19 +15,14 @@
 #define INFO os_printf
 #endif
 
-#define user_procTaskPrio        0
-#define user_procTaskQueueLen    1
-os_event_t    user_procTaskQueue[user_procTaskQueueLen];
-static void loop(os_event_t *events);
-
 /*
  * read temperature from DS18S20
  *
  * Reads last measurement from the scratch pad, reports
  * it via a debug (INFO) message and starts the next measurement.
  */
-void ICACHE_FLASH_ATTR
-readTemp(void)
+static void ICACHE_FLASH_ATTR
+readTemp(void *arg)
 {
     uint16_t tb;
     int16_t  temperature;
@@ -65,15 +60,7 @@ readTemp(void)
 } //end readTemp(void)
 
 
-//Main code function
-static void ICACHE_FLASH_ATTR
-loop(os_event_t *events)
-{
-    readTemp();
-    // If the delay is too long, there will be a watchdog (wdt) reset
-    os_delay_us(1000000);
-    system_os_post(user_procTaskPrio, 0, 0 );
-}
+static os_timer_t read_timer;
 
 //Init function 
 void ICACHE_FLASH_ATTR
@@ -81,8 +68,7 @@ user_init()
 {
     uart_init(BIT_RATE_115200);
 
-    //Start os task
-    system_os_task(loop, user_procTaskPrio,user_procTaskQueue, user_procTaskQueueLen);
-
-    system_os_post(user_procTaskPrio, 0, 0 );
+    os_timer_disarm(&read_timer);
+    os_timer_setfn(&read_timer, (os_timer_func_t *)readTemp, (void *)0);
+    os_timer_arm(&read_timer, 5000, 1);
 }
