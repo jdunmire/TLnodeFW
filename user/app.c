@@ -22,7 +22,7 @@
  * it via a debug (INFO) message and starts the next measurement.
  */
 static void ICACHE_FLASH_ATTR
-readTemp(void *arg)
+readTemp(void)
 {
     uint16_t tb;
     int16_t  temperature;
@@ -51,17 +51,29 @@ readTemp(void *arg)
     INFO(mBuf);
     INFO("\r\n");
 
-    // Start next temperature measurement
-    ds_reset();
-    ds_write(0xcc);   // Skip ROM (address all devices)
-    ds_write(0x44);   // CMD = Start conversion
-
     os_free(mBuf);
 
 } //end readTemp(void)
 
 
+// this will be in micro-seconds
+LOCAL uint32 measurement_start_time;
+#define MEASUREMENT_US 750000    // max time from datasheet for 12 bits
+
+static void ICACHE_FLASH_ATTR
+startTempMeasurement(void)
+{
+    // Start temperature measurement
+    // TODO: be specific about the number of bits for the measurment
+    ds_reset();
+    ds_write(0xcc);   // Skip ROM (address all devices)
+    ds_write(0x44);   // CMD = Start conversion
+    measurement_start_time = system_get_time();
+    return;
+} // end startTempMeasurment()
+
 static os_timer_t read_timer;
+static os_timer_t shutdown_timer;
 
 static void ICACHE_FLASH_ATTR
 user_deep_sleep(void)
@@ -70,22 +82,29 @@ user_deep_sleep(void)
 }
 
 static void ICACHE_FLASH_ATTR
+measurementReady(void)
+{
+    readTemp();
+    // Allow time for the print buffers to flush
+    os_timer_arm(&shutdown_timer, 5, 0);
+}
+
+static void ICACHE_FLASH_ATTR
 sys_init_complete(void)
 {
-    readTemp(NULL);
-    os_timer_disarm(&read_timer);
-    os_timer_setfn(&read_timer, (os_timer_func_t *)user_deep_sleep, NULL);
-    // Allow time for the print buffers to flush
-    // PROBLEM: A short time seems to also cause a sync issue with the DS18B20
-    //          that is only fixed when the DS18B20 is power cycled.
-    //          50ms is too short. The symptom is that the reported
-    //          temperature is always 127.937.
-    //          200 - does not work
-    //          400 - does not work
-    //          500 - does work
-    //          It is not yet clear to me why 500ms is needed.
-    //
-    os_timer_arm(&read_timer, 500, 0);
+    // No need to worry about overflow or 32-bit wrap because
+    // system_get_time() always starts from zero.
+    uint32 elapsed_us = system_get_time() - measurement_start_time;
+
+    if (elapsed_us < MEASUREMENT_US) {
+        INFO("Delaying %d us\r\n", MEASUREMENT_US - elapsed_us);
+        os_timer_arm(&read_timer, (MEASUREMENT_US - elapsed_us) / 1000 , 0);
+    }
+    else
+    {
+        INFO("Skipping delay\r\n");
+        measurementReady();
+    }
 }
 
 //Init function 
@@ -94,7 +113,14 @@ user_init()
 {
     uart_init(BIT_RATE_115200);
 
-    // system_deep_sleep() can not be called in user_init(), so use a
-    // timer function.
+    startTempMeasurement();
+
+    os_timer_disarm(&read_timer);
+    os_timer_setfn(&read_timer, (os_timer_func_t *)measurementReady, NULL);
+
+    os_timer_disarm(&shutdown_timer);
+    os_timer_setfn(&shutdown_timer, (os_timer_func_t *)user_deep_sleep, NULL);
+
     system_init_done_cb(sys_init_complete);
+
 }
