@@ -31,10 +31,20 @@ TARGET		= app
 
 # which modules (subdirectories) of the project to include in compiling
 MODULES		= driver user
-EXTRA_INCDIR    = include $(SDK_BASE)/include
+
+# subproject modules
+MODULES         += modules/esp_mqtt/mqtt
+MODULES         += modules/esp_mqtt/modules
+
+# include file locations
+# Files in INCDIR override any other files of the same name.
+# EXTRA_INCDIR files are included last.
+INCDIR  	:= include
+EXTRA_INCDIR    := $(SDK_BASE)/include
+
 
 # libraries used in this project, mainly provided by the SDK
-LIBS		= c gcc hal pp phy net80211 lwip wpa main
+LIBS		= c gcc hal pp phy net80211 lwip wpa main ssl
 
 # compiler flags using during compilation of source files
 CFLAGS		= -Os -g -O2 -Wpointer-arith -Wundef -Werror -Wl,-EL -fno-inline-functions -nostdlib -mlongcalls -mtext-section-literals  -D__ets__ -DICACHE_FLASH
@@ -82,9 +92,9 @@ TARGET_OUT	:= $(addprefix $(BUILD_BASE)/,$(TARGET).out)
 
 LD_SCRIPT	:= $(addprefix -T$(SDK_BASE)/$(SDK_LDDIR)/,$(LD_SCRIPT))
 
-INCDIR	:= $(addprefix -I,$(SRC_DIR))
+INCDIR	        := $(addprefix -I,$(INCDIR))
 EXTRA_INCDIR	:= $(addprefix -I,$(EXTRA_INCDIR))
-MODULE_INCDIR	:= $(addsuffix /include,$(INCDIR))
+MODULE_INCDIR	:= $(addsuffix /include,$(addprefix -I,$(SRC_DIR)))
 
 FW_FILE_1	:= $(addprefix $(FW_BASE)/,$(FW_FILE_1).bin)
 FW_FILE_2	:= $(addprefix $(FW_BASE)/,$(FW_FILE_2).bin)
@@ -111,7 +121,7 @@ endef
 
 .PHONY: all checkdirs flash clean
 
-all: checkdirs $(TARGET_OUT) $(FW_FILE_1) $(FW_FILE_2)
+all: checkdirs include/mqtt_config.h $(TARGET_OUT) $(FW_FILE_1) $(FW_FILE_2)
 
 $(FW_FILE_1): $(TARGET_OUT)
 	$(vecho) "FW $@"
@@ -161,6 +171,13 @@ paths.inc: paths.tmpl
 	@echo "ERROR: paths.inc is missing or older than paths.tmpl."
 	@echo "       Copy paths.tmpl to paths.inc and modify the settings"
 	@echo "       for your environment."
+	$(Q) exit 1
+
+include/mqtt_config.h:
+	@echo "WARNING: Creating include/mqtt_config.h from a default file."
+	@echo "         Modify the values in mqtt_config.h as appropriate for your"
+	@echo "         environment and the issue make again."
+	$(Q) cp modules/esp_mqtt/include/user_config.h include/mqtt_config.h 
 	$(Q) exit 1
 
 ifneq "$(MAKECMDGOALS)" "clean"
