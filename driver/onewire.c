@@ -32,12 +32,15 @@
 #include <osapi.h>
 #include "driver/onewire.h"
 
+// If this define is changed, then associated *_GPIO5* macros below must
+// also be changed.
+// NOTE: GPIO5 is labeled as GPIO4 on the ESP-12 module
 #define ONEWIRE_PIN 5
 
 static int DS_Power = ONEWIRE_PARASITIC_PWR;
 
 /*
- * Initialize GPIO 2 for one-wire use
+ * Initialize GPIO for one-wire use
  *
  * This must be called during initialization and before any other ds_*
  * functions.
