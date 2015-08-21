@@ -1,19 +1,26 @@
 sensorNode - Firmware for the RockingDLabs SensorNode
 =====================================================
-Based on appTemplate, original README notes below.
+An application to run on the sensorNode hardware and report sensor
+values to an MQTT server.
 
 
-appTemplate - a starting point for ESP8266 applications
-=======================================================
-appTemplate serves as a framework for new ESP8266 applications. All the
-basic pieces are here to get you started.
+Prerequisits for execution
+--------------------------
+In order for the system_get_vdd33() function to work,
+the byte 107 in the init section of flash must be set to 0xff.
+The esp_init_data_vccRead.bin is a copy of the esp_init_data_default.bin
+file from v1.3.0 of the ESP SDK with byte 107 changed from 0x00 to 0xff.
+Write the file to flash with a command like this:
 
-You can build appTemplate and flash it to an ESP8266 ESP-01. It will print
-'Hello World', at 115200 baud, out the ESP-01 serial port.
+    $ esptool.py --port /dev/ttyUSB0 \
+      write_flash 0x7c000 esp_init_data_vccRead.bin
 
-Prerequisits
-------------
+
+Prerequisits for build
+----------------------
   * https://github.com/pfalcon/esp-open-sdk
+  * ESP SDK v1.3.0 (automatically installed by `esp-open-sdk`
+
 
 Build and Install
 ----------------------
@@ -27,29 +34,9 @@ Build and Install
 
         $ make flash
 
-Instructions
-------------
-  * Clone this template to start a project
-  * Delete the top port of this README.md file
-  * Update this and the other README.md files, particularly the copyright
-  * notices. 
-  * Start writing code
-
-
-Contents of the template
+Key files
 ------------------------
-  * README.md  - This should decribe the project. It should include:
-    - A project summary, what it does and how it works.
-    - Build and installation instructions
-    - Copyright and license
-
-    Keep this file short and clear. If it gets too long, move
-    sections into other files and just refer to them from here.
-
   * LICENSE.txt - permissions for copying this project.
-
-  * Makefile - For simple, single file projects you don't need to
-      modify this file. Just put your code in the `user/app.c`.
 
   * .gitignore - This is a list of files that should not be committed.
 
@@ -61,38 +48,38 @@ Contents of the template
       sharing information about your environment when you share your git
       archive and prevents _dualing commits_.
 
-  * driver/ - auxillary code used by your app
-      - the uart driver is included here as an example.
+  * driver/ - auxillary code
+      - the uart driver is included here.
 
   * include/ - application header files
 
   * include/drivers - header files for drivers
-      - header files for the uart driver are include as an example.
+      - header files for the uart driver are here
 
   * licenses/ - licenses for code that is used by, but not part of the
       project. GPL-v3 is included here to cover the uart driver.
 
-  * user/ - The top level code for your app goes here.
+  * user/ - The top level code
 
 License
 -------
 Copyright 2015 Jerry Dunmire
-This file is part of appTemplate
+This file is part of sensorNode
 
-appTemplate is free software: you can redistribute it and/or modify
+sensorNode is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
 the Free Software Foundation, either version 2 of the License, or
 (at your option) any later version.
 
-appTemplate is distributed in the hope that it will be useful,
+sensorNode is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
-along with appTemplate.  If not, see <http://www.gnu.org/licenses/>.
+along with sensorNode.  If not, see <http://www.gnu.org/licenses/>.
 
-Files that are not part of appTemplate are clearly identified at the top
+Files that are not part of sensorNode are clearly identified at the top
 of each of the files. These files are distributed under terms noted in each
 of the files.
 

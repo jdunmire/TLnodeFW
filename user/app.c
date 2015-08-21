@@ -25,6 +25,7 @@
 #define US_PER_SEC 1000000
 
 static void ICACHE_FLASH_ATTR measurementReady(void);
+void ICACHE_FLASH_ATTR dumpInfo(void);
 
 static uint32 measurement_start_time;
 static os_timer_t read_timer;
@@ -320,6 +321,7 @@ sys_init_complete(void)
 
     WIFI_Connect(sysCfg.sta_ssid, sysCfg.sta_pwd, wifiConnectCb);
 
+    dumpInfo();
 }  //end of sys_init_complete()
 
 
