@@ -151,7 +151,8 @@ flash: firmware/0x00000.bin firmware/0x40000.bin
 #	-$(ESPTOOL) --port $(ESPPORT) write_flash 0x00000 firmware/0x00000.bin 0x40000 firmware/0x40000.bin
 	-$(ESPTOOL) --port $(ESPPORT) write_flash \
 	    0x00000 firmware/0x00000.bin \
-	    0x40000 firmware/0x40000.bin
+	    0x40000 firmware/0x40000.bin \
+            0x7c000 esp_init_data_vccRead.bin
 #	    0x3C000 $(BLANKER) \
 
 clean:
