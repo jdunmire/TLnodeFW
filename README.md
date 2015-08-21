@@ -15,6 +15,8 @@ Write the file to flash with a command like this:
     $ esptool.py --port /dev/ttyUSB0 \
       write_flash 0x7c000 esp_init_data_vccRead.bin
 
+The above command has been added to the Makefile.
+
 
 Prerequisits for build
 ----------------------

@@ -12,6 +12,7 @@
 #include <driver/uart.h>
 #include <osapi.h>
 #include <os_type.h>
+#include <gpio.h>
 #include "mem.h"
 #include "mqtt.h"
 #include "config.h"
@@ -21,15 +22,16 @@
 // Enable debugging messages
 
 #define MEASUREMENT_US 750000    // max time from datasheet for 12 bits
-#define DEEP_SLEEP_SECONDS 10
+#define DEEP_SLEEP_SECONDS 300
 #define US_PER_SEC 1000000
 
 static void ICACHE_FLASH_ATTR measurementReady(void);
-void ICACHE_FLASH_ATTR dumpInfo(void);
 
 static uint32 measurement_start_time;
 static os_timer_t read_timer;
 static os_timer_t shutdown_timer;
+static os_timer_t sntp_timer;
+static uint32 current_stamp = 0;
 
 MQTT_Client mqttClient;
 
@@ -42,13 +44,25 @@ MQTT_Client mqttClient;
 void ICACHE_FLASH_ATTR
 wifiConnectCb(uint8_t status)
 {
+    ip_addr_t *addr = (ip_addr_t *)os_zalloc(sizeof(ip_addr_t));
     if(status == STATION_GOT_IP){
         MQTT_Connect(&mqttClient);
         // The INFO message will be 'TCP: Connect to...'
-    } else {
+        //sntp_stop();
+        sntp_set_timezone(-7);
+        sntp_setservername(0, "us.pool.ntp.org"); // set server 0 by domain name
+        sntp_setservername(1, "ntp.sjtu.edu.cn"); // set server 1 by domain name
+        ipaddr_aton("210.72.145.44", addr);
+        sntp_setserver(2, addr); // set server 2 by IP address
+        sntp_init();
+        os_timer_arm(&sntp_timer, 1000, 1);
+    }
+    else
+    {
         MQTT_Disconnect(&mqttClient);
         // The INFO message will be 'Free memory'
     }
+    os_free(addr);
 }
 
 
@@ -74,29 +88,31 @@ mqttPublishedCb(uint32_t *args)
     MQTT_Client* client = (MQTT_Client*)args;
     char *mBuf = (char*)os_zalloc(20);
     char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
-    INFO("MQTT: Published\r\n");
-    INFO("app: queue fill_cnt= %d\r\n", client->msgQueue.rb.fill_cnt);
-    INFO("app: queue size= %d\r\n", client->msgQueue.rb.size);
-    
     uint32 usec = system_get_time();
-    INFO("app: time elapsed = %d.%d s\r\n", usec / 1000000, usec % 1000000);
 
-    if (client->msgQueue.rb.fill_cnt == 0) {
-        if (done == 0) {
-            done = 1;
-            os_sprintf(mBuf, "%d.%03d", usec/1000000, usec % 1000000);
-            os_sprintf(tBuf, "%s/elapsedTime", sysCfg.device_id);
+    if (current_stamp != 0)
+    {
+        INFO("MQTT: Published\r\n");
+       // INFO("app: queue fill_cnt= %d\r\n", client->msgQueue.rb.fill_cnt);
+       // INFO("app: queue size= %d\r\n", client->msgQueue.rb.size);
+       // INFO("app: time elapsed = %d.%d s\r\n", usec / 1000000, usec % 1000000);
+        if (client->msgQueue.rb.fill_cnt == 0) {
+            if (done == 0) {
+                done = 1;
+                os_sprintf(mBuf, "%d.%03d", usec/1000000, usec % 1000000);
+                os_sprintf(tBuf, "%s/elapsedTime", sysCfg.device_id);
 
-            MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 0);
+                MQTT_Publish(&mqttClient, tBuf, mBuf, os_strlen(mBuf), 0, 1);
+            }
+            else
+            { 
+                os_timer_arm(&shutdown_timer, 1, 0);
+            }
         }
         else
-        { 
-            os_timer_arm(&shutdown_timer, 1, 0);
+        {
+            INFO("Waiting for queue to drain...\r\n");
         }
-    }
-    else
-    {
-        INFO("Waiting for queue to drain...\r\n");
     }
     os_free(mBuf);
     os_free(tBuf);
@@ -201,7 +217,7 @@ readTemp(void)
     INFO("\r\n");
     INFO(mBuf);
     INFO("\r\n");
-    MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 0);
+    MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 1);
 
     os_sprintf(tBuf, "%s/degF", sysCfg.device_id);
     if ((temperature == 0) && (mantissa < 0))
@@ -216,8 +232,7 @@ readTemp(void)
     INFO("\r\n");
     INFO(mBuf);
     INFO("\r\n");
-    MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 0);
-
+    MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 1);
 
     os_free(mBuf);
     os_free(tBuf);
@@ -250,6 +265,9 @@ startTempMeasurement(void)
 static void ICACHE_FLASH_ATTR
 user_deep_sleep(void)
 {
+    GPIO_DIS_OUTPUT(5);
+    GPIO_OUTPUT_SET(5, 0);
+
     system_deep_sleep(DEEP_SLEEP_SECONDS * US_PER_SEC);
 }
 
@@ -269,6 +287,36 @@ measurementReady(void)
 
 
 /*
+ * getCurrentTime - record sntp time
+ *
+ * TODO: timestamp will eventually be read from the MQTT server and
+ * then echo'd here. At least, I'm thinking that is faster
+ * than using the SNTP functions.
+ * For now, wait for a proper sntp value
+ */
+static void ICACHE_FLASH_ATTR
+getCurrentTime(void)
+{
+    uint32 sntpTime = 0;
+    char *mBuf = (char*)os_zalloc(30);
+    char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
+
+    INFO("Checking time...\r\n");
+    sntpTime = sntp_get_current_timestamp();
+    if (sntpTime != 0)
+    {
+        INFO("Valid time\r\n");
+        os_sprintf(tBuf, "%s/timestamp", sysCfg.device_id);
+        os_sprintf(mBuf, "%s", sntp_get_real_time(sntpTime));
+        MQTT_Publish(&mqttClient, tBuf, mBuf, os_strlen(mBuf), 0, 1);
+        current_stamp = sntpTime;
+    }
+    INFO("Exit timecheck\r\n");
+
+} //end of getCurrentTime()
+
+
+/*
  * sys_init_complete - callback for sys_init_done
  *
  * The RF calibration is complete, we can proceed with functions that
@@ -277,8 +325,10 @@ measurementReady(void)
 static void ICACHE_FLASH_ATTR
 sys_init_complete(void)
 {
-    // buffer for status and LWT message
     char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
+    char *mBuf = (char*)os_zalloc(20);
+
+    uint32 voltageRaw = system_get_vdd33();
 
     // Setup Wifi connection and MQTT
     MQTT_InitConnection(&mqttClient, sysCfg.mqtt_host, sysCfg.mqtt_port,
@@ -305,17 +355,29 @@ sys_init_complete(void)
     // TODO: the LWT and status don't work the way I think, so 
     //       they are not persistant at this time. I'll fix them
     //       when I know more.
-    os_sprintf(tBuf, "%s/status", sysCfg.device_id);
-    MQTT_InitLWT(&mqttClient, tBuf, "offline",
-                0,  // QOS
-                0   // 1 = retain  TODO: set to 1
-            );
+    //os_sprintf(tBuf, "%s/status", sysCfg.device_id);
+    //MQTT_InitLWT(&mqttClient, tBuf, "offline",
+    //            0,  // QOS
+    //            0   // 1 = retain  TODO: set to 1
+    //        );
+    //MQTT_Publish(
+    //            &mqttClient,
+    //            tBuf,
+    //            "online", 6,  // msg and length
+    //            0, // QOS
+    //            0  // 1 = retain  TODO: set to 1
+    //        );
+
+    os_sprintf(tBuf, "%s/voltage", sysCfg.device_id);
+    os_sprintf(mBuf, "%d.%03d",
+            voltageRaw / 1024,
+            (voltageRaw % 1024) * 1000 / 1024);
     MQTT_Publish(
-                &mqttClient,
-                tBuf,
-                "online", 6,  // msg and length
-                0, // QOS
-                0  // 1 = retain  TODO: set to 1
+            &mqttClient,
+            tBuf,
+            mBuf, os_strlen(mBuf),  // msg and length
+            0, // QOS
+            1  // 1 = retain
             );
     os_free(tBuf);
 
@@ -382,6 +444,10 @@ user_init()
 
     os_timer_disarm(&read_timer);
     os_timer_setfn(&read_timer, (os_timer_func_t *)measurementReady, NULL);
+
+    os_timer_disarm(&sntp_timer);
+    os_timer_setfn(&sntp_timer, (os_timer_func_t *)getCurrentTime, NULL);
+
     startTempMeasurement();
 
     system_init_done_cb(sys_init_complete);
