@@ -5,7 +5,7 @@
  *
  */
 #ifndef INFO
-#define INFO os_printf
+#define INFO //os_printf
 #endif
 
 #include <ets_sys.h>
@@ -217,22 +217,6 @@ readTemp(void)
     INFO("\r\n");
     INFO(mBuf);
     INFO("\r\n");
-    MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 1);
-
-    os_sprintf(tBuf, "%s/degF", sysCfg.device_id);
-    if ((temperature == 0) && (mantissa < 0))
-    {
-        os_sprintf(mBuf, "-%d", (((temperature * 9)/5) + 32));
-    }
-    else
-    {
-        os_sprintf(mBuf, "%d", (((temperature * 9)/5) + 32));
-    }
-
-    INFO("\r\n");
-    INFO(mBuf);
-    INFO("\r\n");
-    MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 1);
 
     os_free(mBuf);
     os_free(tBuf);
