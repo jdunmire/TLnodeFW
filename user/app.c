@@ -213,6 +213,7 @@ readTemp(void)
     {
         os_sprintf(mBuf, "%d.%03d", temperature, abs((mantissa * 625)/10));
     }
+    MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 1);
 
     INFO("\r\n");
     INFO(mBuf);
