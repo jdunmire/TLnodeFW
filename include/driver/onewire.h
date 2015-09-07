@@ -16,8 +16,20 @@
 #ifndef ONEWIRE_H
 #define ONEWIRE_H
 
+#include <ets_sys.h>
+#include <gpio.h>
+#include <osapi.h>
+
 #define ONEWIRE_PARASITIC_PWR 1
 #define ONEWIRE_WIRED_PWR 0
+
+// If this define is changed, then associated *_GPIO5* macros below must
+// also be changed.
+// NOTE: GPIO5 is labeled as GPIO4 on some ESP-12 modules
+#define ONEWIRE_PIN 5
+#define ONEWIRE_IO_MUX (PERIPHS_IO_MUX_GPIO5_U)
+#define ONEWIRE_IO_FUNC (FUNC_GPIO5)
+
 
 void ICACHE_FLASH_ATTR ds_init(int power);
 void ICACHE_FLASH_ATTR ds_reset(void);

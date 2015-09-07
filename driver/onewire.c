@@ -32,11 +32,6 @@
 #include <osapi.h>
 #include "driver/onewire.h"
 
-// If this define is changed, then associated *_GPIO5* macros below must
-// also be changed.
-// NOTE: GPIO5 is labeled as GPIO4 on the ESP-12 module
-#define ONEWIRE_PIN 5
-
 static int DS_Power = ONEWIRE_PARASITIC_PWR;
 
 /*
@@ -58,13 +53,13 @@ void ICACHE_FLASH_ATTR ds_init(int power)
     DS_Power = power;
 
     //disable pulldown
-    PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO5_U, FUNC_GPIO5);
+    PIN_FUNC_SELECT(ONEWIRE_IO_MUX, ONEWIRE_IO_FUNC);
 
     //enable pull up R - PIN_PULLDWN_DIS dropped in SDK v1.3.0
-    //PIN_PULLDWN_DIS(PERIPHS_IO_MUX_GPIO5_U);
+    //PIN_PULLDWN_DIS(ONEWIRE_IO_MUX);
 
     // Configure the GPIO with internal pull-up
-    PIN_PULLUP_EN(PERIPHS_IO_MUX_GPIO5_U);
+    PIN_PULLUP_EN(ONEWIRE_IO_MUX);
     
     // tri-state the pin
     GPIO_DIS_OUTPUT(ONEWIRE_PIN);
