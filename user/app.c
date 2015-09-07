@@ -3,34 +3,45 @@
  *
  * Reads sensors and reports using MQTT
  *
+ *  Copyright (C) 2015 Jerry Dunmire
+ *  This file is part of sensorNode
+ *
+ *  sensorNode is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  sensorNode is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with sensorNode.  If not, see <http://www.gnu.org/licenses/>.
+ *
  */
 //#ifndef INFO
 //#endif
 // Disable debugging messages
-#define INFO //os_printf
+//#define INFO //os_printf
+#include "debug.h"
 
 #include <ets_sys.h>
 #include <driver/uart.h>
 #include <osapi.h>
 #include <os_type.h>
 #include <gpio.h>
-#include "mem.h"
+#include <mem.h>
 #include "mqtt.h"
 #include "config.h"
 #include "user_config.h"
-#include "driver/onewire.h"
-#include "driver/i2c.h"
-#include "driver/i2c_isl.h"
+#include "ds18b20.h"
+#include "als.h"
 
 
-#define MEASUREMENT_US 750000    // max time from datasheet for 12 bits
 #define DEEP_SLEEP_SECONDS 300
 #define US_PER_SEC 1000000
 
-static void ICACHE_FLASH_ATTR measurementReady(void);
-
-static uint32 measurement_start_time;
-static os_timer_t read_timer;
 static os_timer_t shutdown_timer;
 static os_timer_t sntp_timer;
 static uint32 current_stamp = 0;
@@ -80,6 +91,7 @@ mqttDisconnectedCb(uint32_t *args)
 }
 
 static int done = 0;
+
 /*
  * handle MQTT published event
  *
@@ -92,9 +104,15 @@ mqttPublishedCb(uint32_t *args)
     char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
     uint32 usec = system_get_time();
 
-    if (current_stamp != 0)
+    INFO("ts=%d ds= %d, als=%d\r\n", current_stamp,
+            ds18B20_is_complete(), als_is_complete());
+
+    if ((current_stamp != 0)
+            && (ds18B20_is_complete() == true)
+            && (als_is_complete() == true)
+       )
     {
-        INFO("MQTT: Published\r\n");
+        INFO("MQTT: Measurements published\r\n");
        // INFO("app: queue fill_cnt= %d\r\n", client->msgQueue.rb.fill_cnt);
        // INFO("app: queue size= %d\r\n", client->msgQueue.rb.size);
        // INFO("app: time elapsed = %d.%d s\r\n", usec / 1000000, usec % 1000000);
@@ -105,6 +123,7 @@ mqttPublishedCb(uint32_t *args)
                 os_sprintf(tBuf, "%s/elapsedTime", sysCfg.device_id);
 
                 MQTT_Publish(&mqttClient, tBuf, mBuf, os_strlen(mBuf), 0, 1);
+                INFO("MQTT: publishing timestamp\r\n");
             }
             else
             { 
@@ -129,21 +148,10 @@ void ICACHE_FLASH_ATTR
 mqttConnectedCb(uint32_t *args)
 {
     MQTT_Client* client = (MQTT_Client*)args;
-    INFO("JERRY MQTT: Connected\r\n");
+    INFO(" MQTT: Connected\r\n");
     
-    // Read and report the measured temperature.
-    // No need to worry about overflow or 32-bit wrap because
-    // system_get_time() always starts from zero.
-    uint32 elapsed_us = system_get_time() - measurement_start_time;
-    if (elapsed_us < MEASUREMENT_US) {
-        INFO("Delaying %d us\r\n", MEASUREMENT_US - elapsed_us);
-        os_timer_arm(&read_timer, (MEASUREMENT_US - elapsed_us) / 1000 , 0);
-    }
-    else
-    {
-        INFO("Skipping delay\r\n");
-        measurementReady();
-    }
+    ds18B20_start();
+    als_start();
 
 } //end mqttConnectedCb()
 
@@ -181,131 +189,15 @@ mqttDataCb(
 
 
 /*
- * read light level from isl92035
- *
- */
-static void ICACHE_FLASH_ATTR
-readLight(void)
-{
-    uint16_t lux = 0;
-    uint16_t lux_check = 1;
-    int maxloops = 5;
-    char *mBuf = (char*)os_zalloc(20);
-    char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
-
-    // TODO: need to scale based on resolution
-    lux = isl_read_word(ISL_DATA_REG);
-    lux_check = isl_read_word(ISL_DATA_REG);
-
-    while ((lux != lux_check) && (maxloops >= 0)) {
-        lux = lux_check;
-        maxloops -= 1;
-        lux_check = isl_read_word(ISL_DATA_REG);
-    }
-
-    os_sprintf(tBuf, "%s/ambient_lux", sysCfg.device_id);
-    os_sprintf(mBuf, "%d", lux);
-    MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 1);
-
-    INFO("\r\n");
-    INFO(mBuf);
-    INFO("\r\n");
-
-    os_free(mBuf);
-    os_free(tBuf);
-
-} //end readLight(void)
-
-
-/*
- * read temperature from DS18S20
- *
- */
-static void ICACHE_FLASH_ATTR
-readTemp(void)
-{
-    uint16_t tb;
-    int16_t  temperature;
-    int16_t mantissa;
-    char *mBuf = (char*)os_zalloc(20);
-    char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
-
-    // Read measurement
-    ds_reset();
-    ds_write(0xcc);   // Skip ROM (address all devices)
-    ds_write(0xbe);   // CMD = Read scratch pad
-
-    tb = (uint16_t)ds_read();
-    temperature = (int16_t)(tb + ((uint16_t)ds_read() * 256));
-    mantissa = temperature % 16;
-    temperature /= 16;   // Scale to degC
-    os_sprintf(tBuf, "%s/degC", sysCfg.device_id);
-    if ((temperature == 0) && (mantissa < 0))
-    {
-        os_sprintf(mBuf, "-%d.%03d", temperature, abs((mantissa * 625)/10));
-    }
-    else
-    {
-        os_sprintf(mBuf, "%d.%03d", temperature, abs((mantissa * 625)/10));
-    }
-    MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 1);
-
-    INFO("\r\n");
-    INFO(mBuf);
-    INFO("\r\n");
-
-    os_free(mBuf);
-    os_free(tBuf);
-
-} //end readTemp(void)
-
-
-/*
- * startTempMeasurement - tell DS18B20 to start measurement
- *
- * The system time is recorded so that we can later assure that enough
- * time has elapsed for the measurement to complete.
- */
-static void ICACHE_FLASH_ATTR
-startTempMeasurement(void)
-{
-    // Start temperature measurement
-    // TODO: be specific about the number of bits for the measurment
-    ds_reset();
-    ds_write(0xcc);   // Skip ROM (address all devices)
-    ds_write(0x44);   // CMD = Start conversion
-    measurement_start_time = system_get_time();
-    return;
-} // end startTempMeasurment()
-
-
-/*
  * user_deep_sleep - timer callback to trigger deep sleep
  */
 static void ICACHE_FLASH_ATTR
 user_deep_sleep(void)
 {
-    GPIO_DIS_OUTPUT(5);
-    GPIO_OUTPUT_SET(5, 0);
-    // power down the light sensor
-    isl_write_byte(ISL_CMD1_REG, ISL_MODE_PD);
+    ds18B20_shutdown();
+    als_shutdown();
 
     system_deep_sleep(DEEP_SLEEP_SECONDS * US_PER_SEC);
-}
-
-/*
- * measurementReady - timer call back to read the temperature
- *
- * This may be called directly or as a timer callback to assure that
- * enough time has elapsed for the measurement to be complete.
- */
-static void ICACHE_FLASH_ATTR
-measurementReady(void)
-{
-    readTemp();
-    // TODO: report the temperature to MQTT
-    //MQTT_Subscribe(client, "temperature/report", 1);
-    readLight();
 }
 
 
@@ -406,7 +298,7 @@ sys_init_complete(void)
 
     WIFI_Connect(sysCfg.sta_ssid, sysCfg.sta_pwd, wifiConnectCb);
 
-    dumpInfo();
+    //dumpInfo();
 }  //end of sys_init_complete()
 
 
@@ -452,32 +344,20 @@ void ICACHE_FLASH_ATTR
 user_init()
 {
     uart_init(BIT_RATE_115200);
-    i2c_init();
-
-    // Start the light sensor measurements.
-    isl_write_byte(ISL_CMD1_REG, ISL_MODE_ALS_CONT);
-    isl_write_byte(ISL_CMD2_REG, (ISL_RANGE_16K | ISL_ADC_16_BIT));
-
-    // I thought the board was designed for WIRED power, but there is a
-    // design error on the board or in the onewire code. 2015/08/18
-    // 2015/09/05 - looks like I might have ordered parasitic part.
-    //ds_init(ONEWIRE_WIRED_PWR);
-    ds_init(ONEWIRE_PARASITIC_PWR);
 
     // Setup mqtt configuration, this is a local alternative
     // to the flash based CFG_load/save function in the MQTT library.
     initSysCfg();
 
+    INFO("%s\r\n", sysCfg.device_id);
+    ds18B20_init();
+    als_init();
+
     os_timer_disarm(&shutdown_timer);
     os_timer_setfn(&shutdown_timer, (os_timer_func_t *)user_deep_sleep, NULL);
 
-    os_timer_disarm(&read_timer);
-    os_timer_setfn(&read_timer, (os_timer_func_t *)measurementReady, NULL);
-
     os_timer_disarm(&sntp_timer);
     os_timer_setfn(&sntp_timer, (os_timer_func_t *)getCurrentTime, NULL);
-
-    startTempMeasurement();
 
     system_init_done_cb(sys_init_complete);
 
