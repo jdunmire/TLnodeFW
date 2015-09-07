@@ -4,9 +4,10 @@
  * Reads sensors and reports using MQTT
  *
  */
-#ifndef INFO
+//#ifndef INFO
+//#endif
+// Disable debugging messages
 #define INFO //os_printf
-#endif
 
 #include <ets_sys.h>
 #include <driver/uart.h>
@@ -18,8 +19,9 @@
 #include "config.h"
 #include "user_config.h"
 #include "driver/onewire.h"
+#include "driver/i2c.h"
+#include "driver/i2c_isl.h"
 
-// Enable debugging messages
 
 #define MEASUREMENT_US 750000    // max time from datasheet for 12 bits
 #define DEEP_SLEEP_SECONDS 300
@@ -143,8 +145,6 @@ mqttConnectedCb(uint32_t *args)
         measurementReady();
     }
 
-    //TODO: add other measurements
-
 } //end mqttConnectedCb()
 
 
@@ -181,10 +181,45 @@ mqttDataCb(
 
 
 /*
+ * read light level from isl92035
+ *
+ */
+static void ICACHE_FLASH_ATTR
+readLight(void)
+{
+    uint16_t lux = 0;
+    uint16_t lux_check = 1;
+    int maxloops = 5;
+    char *mBuf = (char*)os_zalloc(20);
+    char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
+
+    // TODO: need to scale based on resolution
+    lux = isl_read_word(ISL_DATA_REG);
+    lux_check = isl_read_word(ISL_DATA_REG);
+
+    while ((lux != lux_check) && (maxloops >= 0)) {
+        lux = lux_check;
+        maxloops -= 1;
+        lux_check = isl_read_word(ISL_DATA_REG);
+    }
+
+    os_sprintf(tBuf, "%s/ambient_lux", sysCfg.device_id);
+    os_sprintf(mBuf, "%d", lux);
+    MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 1);
+
+    INFO("\r\n");
+    INFO(mBuf);
+    INFO("\r\n");
+
+    os_free(mBuf);
+    os_free(tBuf);
+
+} //end readLight(void)
+
+
+/*
  * read temperature from DS18S20
  *
- * Reads last measurement from the scratch pad, reports
- * it to MQTT and via a debug (INFO) message.
  */
 static void ICACHE_FLASH_ATTR
 readTemp(void)
@@ -195,7 +230,7 @@ readTemp(void)
     char *mBuf = (char*)os_zalloc(20);
     char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
 
-    // Read previous measurement
+    // Read measurement
     ds_reset();
     ds_write(0xcc);   // Skip ROM (address all devices)
     ds_write(0xbe);   // CMD = Read scratch pad
@@ -252,6 +287,8 @@ user_deep_sleep(void)
 {
     GPIO_DIS_OUTPUT(5);
     GPIO_OUTPUT_SET(5, 0);
+    // power down the light sensor
+    isl_write_byte(ISL_CMD1_REG, ISL_MODE_PD);
 
     system_deep_sleep(DEEP_SLEEP_SECONDS * US_PER_SEC);
 }
@@ -268,6 +305,7 @@ measurementReady(void)
     readTemp();
     // TODO: report the temperature to MQTT
     //MQTT_Subscribe(client, "temperature/report", 1);
+    readLight();
 }
 
 
@@ -414,9 +452,15 @@ void ICACHE_FLASH_ATTR
 user_init()
 {
     uart_init(BIT_RATE_115200);
+    i2c_init();
+
+    // Start the light sensor measurements.
+    isl_write_byte(ISL_CMD1_REG, ISL_MODE_ALS_CONT);
+    isl_write_byte(ISL_CMD2_REG, (ISL_RANGE_16K | ISL_ADC_16_BIT));
 
     // I thought the board was designed for WIRED power, but there is a
     // design error on the board or in the onewire code. 2015/08/18
+    // 2015/09/05 - looks like I might have ordered parasitic part.
     //ds_init(ONEWIRE_WIRED_PWR);
     ds_init(ONEWIRE_PARASITIC_PWR);
 
