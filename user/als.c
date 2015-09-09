@@ -1,7 +1,7 @@
 /*
  *  Ambient light sensor support routines
  *
- *  The light sensor is the ISL29035
+ *  The light sensor is the ISL29035. Reported values are in 1/64 lux.
  *
  *  Copyright (C) 2015 Jerry Dunmire
  *  This file is part of sensorNode
@@ -31,54 +31,141 @@
 #include "user_config.h"
 #include "driver/i2c.h"
 #include "driver/i2c_isl.h"
+//#define INFO os_printf  // override debug.h
 #include "debug.h"
 
 #include "als.h"
 
 extern MQTT_Client mqttClient;
 
-#define MEASUREMENT_US 105000    // max time from datasheet for 16 bits
+/*
+ * Datasheet gives 105ms for 16-bit integration time. Since the ADC is
+ * dual-slope, the total measurement time could be double that for full
+ * scale.
+ */
+#define MEASUREMENT_US (105000 * 2)
+                                    
 
 static os_timer_t read_timer;
 static uint32 measurement_start_time;
 static bool status_cplt = false;
 
 /*
- * read light level from isl92035
+ * report light level using MQTT
  *
  */
 static void ICACHE_FLASH_ATTR
-readLight(void)
+reportLevel(char *lightType, uint32 lux)
+{
+    char *mBuf = (char*)os_zalloc(20);
+    char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
+
+    os_sprintf(tBuf, "%s/%s", sysCfg.device_id, lightType);
+    os_sprintf(mBuf, "%d", lux);
+    MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 1);
+
+    INFO("%s = %s\r\n", tBuf, mBuf);
+
+    os_free(mBuf);
+    os_free(tBuf);
+
+} //end reportLevel(void)
+
+
+/*
+ * read light level from isl92035
+ *
+ */
+static uint16 ICACHE_FLASH_ATTR
+readData16(void)
 {
     uint16_t lux = 0;
     uint16_t lux_check = 1;
     int maxloops = 5;
-    char *mBuf = (char*)os_zalloc(20);
-    char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
 
-    // TODO: need to scale based on resolution
     lux = isl_read_word(ISL_DATA_REG);
     lux_check = isl_read_word(ISL_DATA_REG);
 
+    // make sure the reading didn't change between LSB/MSB reads
     while ((lux != lux_check) && (maxloops >= 0)) {
         lux = lux_check;
         maxloops -= 1;
         lux_check = isl_read_word(ISL_DATA_REG);
     }
+    return (lux);
 
-    os_sprintf(tBuf, "%s/ambient_lux", sysCfg.device_id);
-    os_sprintf(mBuf, "%d", lux);
-    MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 1);
+} //end readData16();
 
-    INFO("\r\n");
-    INFO(mBuf);
-    INFO("\r\n");
 
-    os_free(mBuf);
-    os_free(tBuf);
-    status_cplt = true;
+/*
+ * read light levels
+ *    - a state machine to read ambient level in full
+ *      dynamic range.
+ *    - measurements will be reported in 1/64 lux per bit.
+ *    - called from a timer that allows time for each read.
+ */
+enum alsState_t {
+    als_ranging,
+    als_reading,
+};
 
-} //end readLight(void)
+static enum alsState_t alsState = als_ranging;
+static uint8 Range = ISL_RANGE_64K;
+
+/*
+ * Gains from ISL2905gainAnalysis.ods, Theoretical (K13-K16)
+ */
+static uint8 Gain[4] = {1, 4, 15, 61};
+
+static void ICACHE_FLASH_ATTR
+readLightLevels(void)
+{
+    uint16 lux;
+    uint32 lux32;
+    uint32 mtime = MEASUREMENT_US / 1000;
+
+    lux = readData16();
+    lux32 = (uint32)lux * Gain[Range]; // scale
+    INFO("lux = %d, gain = %d, lux32 = %d\r\n", lux, Gain[Range], lux32);
+    switch(alsState) {
+        case als_ranging:
+            INFO("Ranging starting at %d, lux = %d\r\n", Range, lux);
+            // check range and re-measure if necessary
+            // cut-off points are based on ISL29035gainAnalysis.ods
+            // and allow for gain variation between range settings.
+            alsState = als_reading;
+            if (lux < 14000) {
+                Range = ISL_RANGE_16K;
+                if (lux < 880) {
+                    Range = ISL_RANGE_1K;
+                } else if (lux < 3500) {
+                    Range = ISL_RANGE_4K;
+                }
+                INFO("Change range to %d\r\n", Range);
+                isl_write_byte(ISL_CMD2_REG, (Range | ISL_ADC_16_BIT));
+                isl_write_byte(ISL_CMD1_REG, ISL_MODE_ALS_CONT);
+                os_timer_arm(&read_timer, mtime, 0);
+                break;
+            } else {
+                // range is OK, no need to re-read.
+                // Fall through to the als_reading state.
+            }
+            // Conditional breaks above.
+            // Fall through otherwise.
+
+        case als_reading:
+            INFO("Reading ...\r\n");
+            reportLevel("ambient_lux", lux32);
+            status_cplt = true;
+            break;
+
+        default:
+            os_printf("State error in readLightLevels()\r\n");
+            break;
+
+    } // end switch(alsState)
+
+} // end readLightLevels()
 
 
 
@@ -94,14 +181,15 @@ als_init(void)
     INFO("als_init()\r\n");
     i2c_init();
     // Start the light sensor measurements.
+    Range = ISL_RANGE_64K;
+    isl_write_byte(ISL_CMD2_REG, (Range | ISL_ADC_16_BIT));
     isl_write_byte(ISL_CMD1_REG, ISL_MODE_ALS_CONT);
-    isl_write_byte(ISL_CMD2_REG, (ISL_RANGE_16K | ISL_ADC_16_BIT));
 
     measurement_start_time = system_get_time();
 
     // Setup up the timer, but don't start it
     os_timer_disarm(&read_timer);
-    os_timer_setfn(&read_timer, (os_timer_func_t *)readLight, NULL);
+    os_timer_setfn(&read_timer, (os_timer_func_t *)readLightLevels, NULL);
 
     return;
 } // end ds_init()
@@ -127,7 +215,7 @@ als_start()
     else
     {
         INFO("Skipping delay for als\r\n");
-        readLight();
+        readLightLevels();
     }
 
 } //end als_start()

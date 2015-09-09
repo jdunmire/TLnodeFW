@@ -66,7 +66,7 @@
 #define ISL_RANGE_1K        0x00
 #define ISL_RANGE_4K        0x01
 #define ISL_RANGE_16K       0x02
-#define ISL_RANGE_65K       0x03
+#define ISL_RANGE_64K       0x03
 
 #define ISL_ADC_16_BIT      0x00
 #define ISL_ADC_12_BIT      0x04
