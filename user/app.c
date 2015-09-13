@@ -275,10 +275,12 @@ void ICACHE_FLASH_ATTR
 reporter(os_event_t *event) {
     driverStatusMask |= (event->sig & 0xff);
 
-    if (driverStatusMask == (DRIVER_1 & DRIVER_2 & DRIVER_3)) {
+    INFO("reporter status: %x, %x\r\n", driverStatusMask, (DRIVER_1 | DRIVER_2 | DRIVER_3));
+    if (driverStatusMask == (DRIVER_1 | DRIVER_2 | DRIVER_3)) {
+        INFO("Reporting...\r\n");
         // measurements complete, report
         uint32 usec = system_get_time();
-        char *timeBuf = (char*)os_zalloc(8);
+        char *timeBuf = (char*)os_zalloc(16);
 
         // Collect reports
         report_t *driver1 = ds18B20_report();
@@ -308,19 +310,25 @@ reporter(os_event_t *event) {
 
         // elapsed time
         usec = system_get_time();
-        os_sprintf(mBuf, "%d.%03d", usec/1000000, usec % 1000000);
-        INFO("Used mBuf = %s\r\n", strlen(mBuf));
+        os_sprintf(timeBuf, "%d.%3d", usec/1000000, usec % 1000000);
+        (void)strcat(mBuf,timeBuf);  // Elapsed Time
 
+
+        INFO("Used mBuf = %d\r\n", strlen(mBuf));
         // publish the report
         os_sprintf(tBuf, "%s/report", sysCfg.device_id);
         MQTT_Publish(&mqttClient, tBuf, mBuf, os_strlen(mBuf), 0, 1);
         INFO("%s:%s\r\n", tBuf, mBuf);
+        /*
+        INFO("Got here\r\n");
+        */
 
         // cleanup
         os_free(timeBuf);
         os_free(mBuf);
         os_free(tBuf);
     }
+    INFO("Waiting...\r\n");
     return;
 } // end reporter()
 

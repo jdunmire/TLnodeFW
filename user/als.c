@@ -211,6 +211,8 @@ als_report(void)
     os_sprintf(myReport->buffer, "%d", Lux);
     myReport->len = strlen(myReport->buffer);
 
+    return(myReport);
+
 } //end als_report(void)
 
 

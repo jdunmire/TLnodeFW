@@ -78,6 +78,8 @@ ds18B20_report(void)
     }
     myReport->len = strlen(myReport->buffer);
 
+    return(myReport);
+
 } //end ds18B20_report(void)
 
 

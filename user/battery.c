@@ -55,8 +55,8 @@ report_t* ICACHE_FLASH_ATTR
 battery_report(void)
 {
     uint32 voltageRaw = system_get_vdd33();
-    myReport = newReport(8);
-    os_sprintf(myReport->buffer, "%2d.%03d",
+    myReport = newReport(10);
+    os_sprintf(myReport->buffer, "%d.%03d",
             voltageRaw / 1024,
             (voltageRaw % 1024) * 1000 / 1024);
     myReport->len = strlen(myReport->buffer);
