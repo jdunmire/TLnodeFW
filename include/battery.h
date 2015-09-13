@@ -1,5 +1,5 @@
 /*
- *  Ambient light sensor support routines
+ *  Measure battery voltage
  *
  *  Copyright (C) 2015 Jerry Dunmire
  *  This file is part of sensorNode
@@ -18,13 +18,13 @@
  *  along with sensorNode.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
-#ifndef ALS_H
-#define ALS_H
+#ifndef BATTERY_H
+#define BATTERY_H
 #include <report.h>
 
-void als_init(uint32_t pid, uint32_t id);
-void als_start(void);
-report_t* als_report(void);
-void als_shutdown(void);
+void battery_init(uint32_t pid, uint32_t id);
+void battery_start(void);
+report_t* battery_report(void);
+void battery_shutdown(void);
 
 #endif

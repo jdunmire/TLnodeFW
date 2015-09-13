@@ -1,5 +1,5 @@
 /*
- *  Ambient light sensor support routines
+ *  Report object
  *
  *  Copyright (C) 2015 Jerry Dunmire
  *  This file is part of sensorNode
@@ -18,13 +18,35 @@
  *  along with sensorNode.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
-#ifndef ALS_H
-#define ALS_H
-#include <report.h>
+#include <os_type.h>
+#include <mem.h>
 
-void als_init(uint32_t pid, uint32_t id);
-void als_start(void);
-report_t* als_report(void);
-void als_shutdown(void);
+#include "report.h"
 
-#endif
+
+/*
+ * newReport - allocate an empty report structure
+ *
+ */
+report_t * ICACHE_FLASH_ATTR
+newReport(uint8_t bsize) {
+    report_t *report = (report_t *)os_zalloc(sizeof(report_t));
+    report->buffer = (char *)os_zalloc(bsize);
+    report->buffer[0] = '\0';  // null terminator
+    report->len = 0;
+    report->bsize = bsize;
+
+    return(report);
+} // end of newReport()
+
+
+/*
+ * freeReport - free the allocated report space
+ *
+ */
+void ICACHE_FLASH_ATTR
+freeReport(report_t * report) {
+    os_free(report->buffer);
+    os_free(report);
+    return;
+} // end of freeReport()

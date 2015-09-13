@@ -27,4 +27,7 @@ typedef struct report_s {
     char *  buffer; // buffer
 } report_t;
 
+report_t *newReport(uint8_t bsize);
+void freeReport(report_t *report);
+
 #endif

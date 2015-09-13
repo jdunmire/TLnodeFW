@@ -20,10 +20,8 @@
  *  along with sensorNode.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
-//#ifndef INFO
-//#endif
-// Disable debugging messages
-//#define INFO //os_printf
+
+//#define INFO //os_printf  // over-ride debug setting
 #include "debug.h"
 
 #include <ets_sys.h>
@@ -34,10 +32,11 @@
 #include <mem.h>
 #include "mqtt.h"
 #include "config.h"
-#include "user_config.h"
-#include "ds18b20.h"
 #include "als.h"
 #include "report.h"
+#include "user_config.h"
+#include "ds18b20.h"
+#include "battery.h"
 
 // Device ID = 1, Application version = 1
 #define ID_VERSION_STR  "1,1"
@@ -47,13 +46,14 @@
 
 static os_timer_t shutdown_timer;
 
-#define REPORTER_PID    0   // 0-2, low to high
-#define REPORTER_QLEN   2   // allow space for both drivers to report
+#define REPORTER_PID    1   // 0-2, low to high, 0 used by MQTT
+#define REPORTER_QLEN   3   // allow space for all drivers to report
 #define DRIVER_1        0x01
 #define DRIVER_2        0x02
+#define DRIVER_3        0x04
 // system_os_post(REPORTER_PID, driverID, driverStatus );
 
-static os_event_t       reporter_queue[user_procTaskQueueLen];
+static os_event_t       reporter_queue[REPORTER_QLEN];
 static uint8_t          driverStatusMask = 0;
 
 MQTT_Client mqttClient;
@@ -62,7 +62,6 @@ MQTT_Client mqttClient;
 /*
  * This gets called when the connection to the WiFi AP
  * changes.
- *
  */
 void ICACHE_FLASH_ATTR
 wifiConnectCb(uint8_t status)
@@ -92,8 +91,6 @@ mqttDisconnectedCb(uint32_t *args)
     INFO("MQTT: Disconnected\r\n");
 }
 
-static int done = 0;
-
 /*
  * handle MQTT published event
  *
@@ -102,42 +99,10 @@ void ICACHE_FLASH_ATTR
 mqttPublishedCb(uint32_t *args)
 {
     MQTT_Client* client = (MQTT_Client*)args;
-    char *mBuf = (char*)os_zalloc(20);
-    char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
-    uint32 usec = system_get_time();
+    INFO("MQTT: Report published\r\n");
 
-    INFO("ds= %d, als=%d\r\n",
-            ds18B20_is_complete(), als_is_complete());
-
-    if ((ds18B20_is_complete() == true)
-            && (als_is_complete() == true)
-       )
-    {
-        INFO("MQTT: Measurements published\r\n");
-       // INFO("app: queue fill_cnt= %d\r\n", client->msgQueue.rb.fill_cnt);
-       // INFO("app: queue size= %d\r\n", client->msgQueue.rb.size);
-       // INFO("app: time elapsed = %d.%d s\r\n", usec / 1000000, usec % 1000000);
-        if (client->msgQueue.rb.fill_cnt == 0) {
-            if (done == 0) {
-                done = 1;
-                os_sprintf(mBuf, "%d.%03d", usec/1000000, usec % 1000000);
-                os_sprintf(tBuf, "%s/elapsedTime", sysCfg.device_id);
-
-                MQTT_Publish(&mqttClient, tBuf, mBuf, os_strlen(mBuf), 0, 1);
-                INFO("MQTT: publishing timestamp\r\n");
-            }
-            else
-            { 
-                os_timer_arm(&shutdown_timer, 1, 0);
-            }
-        }
-        else
-        {
-            INFO("Waiting for queue to drain...\r\n");
-        }
-    }
-    os_free(mBuf);
-    os_free(tBuf);
+    // shutdown in 1 milli-second
+    os_timer_arm(&shutdown_timer, 1, 0);
 }
 
 
@@ -153,6 +118,7 @@ mqttConnectedCb(uint32_t *args)
     
     ds18B20_start();
     als_start();
+    battery_start();
 
 } //end mqttConnectedCb()
 
@@ -190,16 +156,21 @@ mqttDataCb(
 
 
 /*
- * user_deep_sleep - timer callback to trigger deep sleep
+ * user_deep_sleep - timer callback to t clean up and rigger deep sleep
  */
 static void ICACHE_FLASH_ATTR
 user_deep_sleep(void)
 {
     ds18B20_shutdown();
     als_shutdown();
+    battery_shutdown();
+
+    uint32_t usec = system_get_time();
+    INFO("elapsed: %d.%03d\r\n", usec/1000000, usec % 1000000);
 
     system_deep_sleep(DEEP_SLEEP_SECONDS * US_PER_SEC);
 }
+
 
 /*
  * sys_init_complete - callback for sys_init_done
@@ -210,11 +181,6 @@ user_deep_sleep(void)
 static void ICACHE_FLASH_ATTR
 sys_init_complete(void)
 {
-    char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
-    char *mBuf = (char*)os_zalloc(20);
-
-    uint32 voltageRaw = system_get_vdd33();
-
     // Setup Wifi connection and MQTT
     MQTT_InitConnection(&mqttClient, sysCfg.mqtt_host, sysCfg.mqtt_port,
            // sysCfg.security
@@ -253,22 +219,10 @@ sys_init_complete(void)
     //            0  // 1 = retain  TODO: set to 1
     //        );
 
-    os_sprintf(tBuf, "%s/voltage", sysCfg.device_id);
-    os_sprintf(mBuf, "%d.%03d",
-            voltageRaw / 1024,
-            (voltageRaw % 1024) * 1000 / 1024);
-    MQTT_Publish(
-            &mqttClient,
-            tBuf,
-            mBuf, os_strlen(mBuf),  // msg and length
-            0, // QOS
-            1  // 1 = retain
-            );
-    os_free(tBuf);
-
     WIFI_Connect(sysCfg.sta_ssid, sysCfg.sta_pwd, wifiConnectCb);
 
     //dumpInfo();
+
 }  //end of sys_init_complete()
 
 
@@ -321,23 +275,51 @@ void ICACHE_FLASH_ATTR
 reporter(os_event_t *event) {
     driverStatusMask |= (event->sig & 0xff);
 
-    if (driverStatusMask == (DRIVER_1 & DRIVER_2)) {
+    if (driverStatusMask == (DRIVER_1 & DRIVER_2 & DRIVER_3)) {
         // measurements complete, report
-        report_t *driver1 = ds18b20_report();
-        report_t *driver2 = als_report();
-        uint8_t buflen = driver1->len + driver2->len + 1 + SPACE4LOCAL_REPORTS;
-        char *mBuf = (char*)os_zalloc(bufLen);
+        uint32 usec = system_get_time();
+        char *timeBuf = (char*)os_zalloc(8);
 
-        // DeviceID and application version
-        (void)strcpy(mBuf, ID_VERSION_STR);
+        // Collect reports
+        report_t *driver1 = ds18B20_report();
+        report_t *driver2 = als_report();
+        report_t *driver3 = battery_report();
+
+        // allocate space for the summary report
+        /*
+        uint8_t buflen = driver1->len
+            + driver2->len
+            + driver3->len
+            + 2 + SPACE4LOCAL_REPORTS;
+        */
+        uint8_t buflen = 255;
+        char *mBuf = (char*)os_zalloc(buflen);
+        char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
+
+        // fill out the report
+        (void)strcpy(mBuf, ID_VERSION_STR);  // deviceID and report version
         (void)strcat(mBuf,",");
-        (void)strcat(mBuf,driver1->buffer);
+        (void)strcat(mBuf,driver1->buffer);  // temperature
         (void)strcat(mBuf,",");
-        (void)strcat(mBuf,driver2->buffer);
+        (void)strcat(mBuf,driver2->buffer);  // ambient light
         (void)strcat(mBuf,",");
-        // voltage
+        (void)strcat(mBuf,driver3->buffer);  // voltage
         (void)strcat(mBuf,",");
+
         // elapsed time
+        usec = system_get_time();
+        os_sprintf(mBuf, "%d.%03d", usec/1000000, usec % 1000000);
+        INFO("Used mBuf = %s\r\n", strlen(mBuf));
+
+        // publish the report
+        os_sprintf(tBuf, "%s/report", sysCfg.device_id);
+        MQTT_Publish(&mqttClient, tBuf, mBuf, os_strlen(mBuf), 0, 1);
+        INFO("%s:%s\r\n", tBuf, mBuf);
+
+        // cleanup
+        os_free(timeBuf);
+        os_free(mBuf);
+        os_free(tBuf);
     }
     return;
 } // end reporter()
@@ -361,8 +343,9 @@ user_init()
     INFO("%s\r\n", sysCfg.device_id);
 
     // Initialize drivers
-    ds18B20_init(DRIVER_1);
-    als_init(DRIVER_2);
+    ds18B20_init(REPORTER_PID, DRIVER_1);
+    als_init(REPORTER_PID, DRIVER_2);
+    battery_init(REPORTER_PID, DRIVER_3);
 
     // setup timers and processes
     os_timer_disarm(&shutdown_timer);

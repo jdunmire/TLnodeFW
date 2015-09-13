@@ -29,6 +29,7 @@
 #include "user_config.h"
 #include "debug.h"
 #include "driver/onewire.h"
+#include "report.h"
 
 #include "ds18b20.h"
 
@@ -38,20 +39,23 @@ extern MQTT_Client mqttClient;
 
 static os_timer_t read_timer;
 static uint32 measurement_start_time;
-static bool status_cplt = false;
+
+static uint32_t reportPID = 0;
+static uint32_t myid = 0;
+static report_t *myReport;
 
 /*
- * read temperature from DS18S20
+ * report ds18b20 reading
  *
  */
-static void ICACHE_FLASH_ATTR
-readTemp(void)
+report_t* ICACHE_FLASH_ATTR
+ds18B20_report(void)
 {
     uint16_t tb;
     int16_t  temperature;
     int16_t mantissa;
-    char *mBuf = (char*)os_zalloc(20);
-    char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
+
+    myReport = newReport(10);
 
     // Read measurement
     ds_reset();
@@ -62,37 +66,33 @@ readTemp(void)
     temperature = (int16_t)(tb + ((uint16_t)ds_read() * 256));
     mantissa = temperature % 16;
     temperature /= 16;   // Scale to degC
-    os_sprintf(tBuf, "%s/degC", sysCfg.device_id);
     if ((temperature == 0) && (mantissa < 0))
     {
-        os_sprintf(mBuf, "-%d.%03d", temperature, abs((mantissa * 625)/10));
+        os_sprintf(myReport->buffer, "-%d.%03d",
+                temperature, abs((mantissa * 625)/10));
     }
     else
     {
-        os_sprintf(mBuf, "%d.%03d", temperature, abs((mantissa * 625)/10));
+        os_sprintf(myReport->buffer, "%d.%03d",
+                temperature, abs((mantissa * 625)/10));
     }
-    MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 1);
+    myReport->len = strlen(myReport->buffer);
 
-    INFO("\r\n");
-    INFO(mBuf);
-    INFO("\r\n");
-
-    os_free(mBuf);
-    os_free(tBuf);
-    status_cplt = true;
-
-} //end readTemp(void)
+} //end ds18B20_report(void)
 
 
 /*
- * startTempMeasurement - tell DS18B20 to start measurement
+ * ds18B20_init- tell DS18B20 to start measurement
  *
  * The system time is recorded so that we can later assure that enough
  * time has elapsed for the measurement to complete.
  */
 void ICACHE_FLASH_ATTR
-ds18B20_init(void)
+ds18B20_init(uint32_t pid, uint32_t id)
 {
+    reportPID = pid;
+    myid = id;
+
     INFO("ds18B20_init()\r\n");
     // I thought the board was designed for WIRED power, but there is a
     // design error on the board or in the onewire code. 2015/08/18
@@ -109,15 +109,16 @@ ds18B20_init(void)
 
     // Setup up the timer, but don't start it
     os_timer_disarm(&read_timer);
-    os_timer_setfn(&read_timer, (os_timer_func_t *)readTemp, NULL);
+    os_timer_setfn(&read_timer, (os_timer_func_t *)ds18B20_start, NULL);
 
     return;
-} // end ds_init()
+} // end ds18B20_init()
 
 
 /*
- * handle MQTT connection
- *
+ *  Function name is a misnomer because the measurement was started in
+ *  ds18B20_init(). This really checks for the measurement to be
+ *  complete.
  */
 void ICACHE_FLASH_ATTR
 ds18B20_start()
@@ -135,18 +136,10 @@ ds18B20_start()
     else
     {
         INFO("Skipping delay\r\n");
-        readTemp();
+        system_os_post(reportPID, myid, 0);
     }
 
 } //end ds18B20_start()
-
-
-bool ICACHE_FLASH_ATTR
-ds18B20_is_complete()
-{
-    INFO("ds18B20_is_complete()\r\n");
-    return(status_cplt);
-} // end ds18B20_is_complete()
 
 
 void ICACHE_FLASH_ATTR
@@ -157,6 +150,7 @@ ds18B20_shutdown(void)
     // one-wire devices (the DS18B20 in this case).
     GPIO_DIS_OUTPUT(ONEWIRE_PIN);
     GPIO_OUTPUT_SET(ONEWIRE_PIN, 0);
+    freeReport(myReport);
 
     return;
-}
+}  //end ds18B20_shutdown()

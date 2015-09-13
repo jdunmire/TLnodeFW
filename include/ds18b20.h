@@ -22,9 +22,8 @@
 #define DS18B20_H
 #include <report.h>
 
-void ds18B20_init(uint32_t);
+void ds18B20_init(uint32_t pid, uint32_t id);
 void ds18B20_start(void);
-bool ds18B20_is_complete(void);  // obsolete
 report_t* ds18B20_report(void);
 void ds18B20_shutdown(void);
 

@@ -33,10 +33,9 @@
 #include "driver/i2c_isl.h"
 //#define INFO os_printf  // override debug.h
 #include "debug.h"
+#include "report.h"
 
 #include "als.h"
-
-extern MQTT_Client mqttClient;
 
 /*
  * Datasheet gives 105ms for 16-bit integration time. Since the ADC is
@@ -46,37 +45,20 @@ extern MQTT_Client mqttClient;
 #define MEASUREMENT_US (105000 * 2)
                                     
 
+static uint32_t reportPID = 0;
+static uint32_t myid = 0;
+static report_t *myReport;
+
 static os_timer_t read_timer;
-static uint32 measurement_start_time;
-static bool status_cplt = false;
+static uint32_t measurement_start_time;
 
-/*
- * report light level using MQTT
- *
- */
-static void ICACHE_FLASH_ATTR
-reportLevel(char *lightType, uint32 lux)
-{
-    char *mBuf = (char*)os_zalloc(20);
-    char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
-
-    os_sprintf(tBuf, "%s/%s", sysCfg.device_id, lightType);
-    os_sprintf(mBuf, "%d", lux);
-    MQTT_Publish(&mqttClient, tBuf, mBuf, strlen(mBuf), 0, 1);
-
-    INFO("%s = %s\r\n", tBuf, mBuf);
-
-    os_free(mBuf);
-    os_free(tBuf);
-
-} //end reportLevel(void)
-
+static uint16_t Lux = 0;
 
 /*
  * read light level from isl92035
  *
  */
-static uint16 ICACHE_FLASH_ATTR
+static uint16_t ICACHE_FLASH_ATTR
 readData16(void)
 {
     uint16_t lux = 0;
@@ -106,39 +88,35 @@ readData16(void)
  */
 enum alsState_t {
     als_ranging,
-    als_reading,
+    als_ready,
 };
 
 static enum alsState_t alsState = als_ranging;
-static uint8 Range = ISL_RANGE_64K;
+static uint8_t Range = ISL_RANGE_64K;
 
 /*
  * Gains from ISL2905gainAnalysis.ods, Theoretical (K13-K16)
  */
-static uint8 Gain[4] = {1, 4, 15, 61};
+static uint8_t Gain[4] = {1, 4, 15, 61};
 
 static void ICACHE_FLASH_ATTR
 readLightLevels(void)
 {
-    uint16 lux;
-    uint32 lux32;
-    uint32 mtime = MEASUREMENT_US / 1000;
+    uint32_t mtime = MEASUREMENT_US / 1000;
 
-    lux = readData16();
-    lux32 = (uint32)lux * Gain[Range]; // scale
-    INFO("lux = %d, gain = %d, lux32 = %d\r\n", lux, Gain[Range], lux32);
+    Lux = readData16();
     switch(alsState) {
         case als_ranging:
-            INFO("Ranging starting at %d, lux = %d\r\n", Range, lux);
+            INFO("Ranging starting at %d, lux = %d\r\n", Range, Lux);
             // check range and re-measure if necessary
             // cut-off points are based on ISL29035gainAnalysis.ods
             // and allow for gain variation between range settings.
-            alsState = als_reading;
-            if (lux < 14000) {
+            alsState = als_ready;
+            if (Lux < 14000) {
                 Range = ISL_RANGE_16K;
-                if (lux < 880) {
+                if (Lux < 880) {
                     Range = ISL_RANGE_1K;
-                } else if (lux < 3500) {
+                } else if (Lux < 3500) {
                     Range = ISL_RANGE_4K;
                 }
                 INFO("Change range to %d\r\n", Range);
@@ -148,15 +126,14 @@ readLightLevels(void)
                 break;
             } else {
                 // range is OK, no need to re-read.
-                // Fall through to the als_reading state.
+                // Fall through to the als_ready state.
             }
             // Conditional breaks above.
             // Fall through otherwise.
 
-        case als_reading:
-            INFO("Reading ...\r\n");
-            reportLevel("ambient_lux", lux32);
-            status_cplt = true;
+        case als_ready:
+            INFO("ALS ready ...\r\n");
+            system_os_post(reportPID, myid, 0);
             break;
 
         default:
@@ -168,16 +145,18 @@ readLightLevels(void)
 } // end readLightLevels()
 
 
-
 /*
- * startTempMeasurement - tell DS18B20 to start measurement
+ * startTempMeasurement - tell isl29035 to start measurement
  *
  * The system time is recorded so that we can later assure that enough
  * time has elapsed for the measurement to complete.
  */
 void ICACHE_FLASH_ATTR
-als_init(void)
+als_init(uint32_t pid, uint32_t id)
 {
+    reportPID = pid;
+    myid = id;
+
     INFO("als_init()\r\n");
     i2c_init();
     // Start the light sensor measurements.
@@ -192,7 +171,7 @@ als_init(void)
     os_timer_setfn(&read_timer, (os_timer_func_t *)readLightLevels, NULL);
 
     return;
-} // end ds_init()
+} // end als_init()
 
 
 /*
@@ -207,7 +186,7 @@ als_start()
     // Read and report the measured temperature.
     // No need to worry about overflow or 32-bit wrap because
     // system_get_time() always starts from zero.
-    uint32 elapsed_us = system_get_time() - measurement_start_time;
+    uint32_t elapsed_us = system_get_time() - measurement_start_time;
     if (elapsed_us < MEASUREMENT_US) {
         INFO("Delaying %d us\r\n", MEASUREMENT_US - elapsed_us);
         os_timer_arm(&read_timer, (MEASUREMENT_US - elapsed_us) / 1000 , 0);
@@ -221,12 +200,18 @@ als_start()
 } //end als_start()
 
 
-bool ICACHE_FLASH_ATTR
-als_is_complete()
+/*
+ * format light level for reporting process
+ *
+ */
+report_t* ICACHE_FLASH_ATTR
+als_report(void)
 {
-    INFO("als_is_complete()\r\n");
-    return(status_cplt);
-} // end als_is_complete()
+    myReport = newReport(12);
+    os_sprintf(myReport->buffer, "%d", Lux);
+    myReport->len = strlen(myReport->buffer);
+
+} //end als_report(void)
 
 
 void ICACHE_FLASH_ATTR
@@ -235,6 +220,7 @@ als_shutdown(void)
     INFO("als_shutdown()\r\n");
     // power down the light sensor
     isl_write_byte(ISL_CMD1_REG, ISL_MODE_PD);
+    freeReport(myReport);
 
     return;
 }  //end als_shutdown()
