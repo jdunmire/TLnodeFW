@@ -1,0 +1,43 @@
+user_init()  - entry point and setup
+    initSysCfg() - setup configuration
+
+    -- Init devices --
+    *_init()
+
+sys_init_complete() - Called when system_init complete
+    - sets up callbacks for MQTT
+    - sets up MQTT client
+    
+    - reports voltage
+    
+    - Starts WiFi connecton
+
+wifiConnectCb()
+    Connects to MQTT broker
+    Starts NTP, starts timer to call getCurrentTime()
+    or
+    Disconnects from MQTT for status != STATION_GOT_IP
+    
+
+mqttConnectedCb()
+    Starts device readings
+    *_start()
+
+mqttPublishedCb()
+    *_is_complete() - to tell when devices have sent measurements
+
+    State machine waits for MQTT messages to complete and then
+    publishes a timestamp. When that drains it shuts down the system.
+
+mqttDisconnectedCb()
+    Simply reports
+
+mqttDataCb()
+    Called if MQTT message receive, but no subscriptions so not actually
+    used.
+    
+user_deep_sleep()
+    *_shutdown()
+    Goto to lowest power mode and sleep
+    
+

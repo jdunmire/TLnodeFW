@@ -1,0 +1,82 @@
+Send one message that is a unified report of the measured values.
+
+SysID/report
+v1,v2,v3,...
+
+user_init()
+
+sys_init_complete()
+
+wifiConnectedCb()
+
+mqttConnectedCb()
+
+mqttPublishedCb()
+
+
+
+Each device could pass a formatted string. A 'process' could combine the
+strings and send it when all have been received.
+
+Do I need a message that reports the value names?
+What about units and ranges?
+
+name,max,min,units,scale - but this is also knowable apriori,
+particularly if there is a version number at the beginning of the
+report.
+deviceType,Version,v1,v2,v3,...
+One of the values should be elapsed time.
+
+The more I send more time it takes.
+Overhead is low, 2-5 bytes, so message length is not a great problem.
+
+system_os_post(uint8 PID, uint32_t signal, uint32_t paramter);
+The docs refer to the first argument as PRIO, but since there are only 3
+processes and each at a different priority, PID makes more sense to me.
+
+
+Each driver
+-----------
+void <name>_init(uint32_t signal)
+   signal to send when measurement is complete.
+
+void <name>_start()
+report_t * <name>_report()
+void <name>_shutdown()
+
+When measurement is ready the driver sends a message to the reporting
+process. The reporting process then calls <name>_report() to get the
+measurement. The reporting process should call os_free().
+
+report_t is a structure with a buffer and a length of the reported string.
+
+Main App
+-----------
+user_init()
+    initSysCfg()
+    *_init
+    setup reporting process
+
+sys_init_complete()
+    setup callbacks for MQTT
+    setup MQTT client
+    start WiFi
+    *_start()   // drivers
+
+wifiConnectCb()
+    connect to MQTT broker
+
+mqttConnectedCb()
+    Wait for MQTT messages to complete and then shutdown
+
+user_deep_sleep()
+    *_shutdown()
+    Goto lowest power mode and slepp
+
+reportingProc()
+    Builds bitmask of completed measurements
+    When all complete,
+      - add voltage
+      - add elapsed time
+      - send MQTT message
+

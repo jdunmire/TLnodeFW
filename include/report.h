@@ -1,5 +1,5 @@
 /*
- *  Ambient light sensor support routines
+ *  Report structures
  *
  *  Copyright (C) 2015 Jerry Dunmire
  *  This file is part of sensorNode
@@ -18,14 +18,13 @@
  *  along with sensorNode.  If not, see <http://www.gnu.org/licenses/>.
  *
  */
-#ifndef ALS_H
-#define ALS_H
-#include <report.h>
+#ifndef REPORT_H
+#define REPORT_H
 
-void als_init(uint32_t);
-void als_start(void);
-bool als_is_complete(void);  // obsolete
-report_t* als_report(void);
-void als_shutdown(void);
+typedef struct report_s {
+    uint8_t len;    // length of null terminated string in buffer
+    uint8_t bsize;  // buffer size
+    char *  buffer; // buffer
+} report_t;
 
 #endif

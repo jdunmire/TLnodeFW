@@ -37,14 +37,24 @@
 #include "user_config.h"
 #include "ds18b20.h"
 #include "als.h"
+#include "report.h"
 
+// Device ID = 1, Application version = 1
+#define ID_VERSION_STR  "1,1"
 
 #define DEEP_SLEEP_SECONDS 300
 #define US_PER_SEC 1000000
 
 static os_timer_t shutdown_timer;
-static os_timer_t sntp_timer;
-static uint32 current_stamp = 0;
+
+#define REPORTER_PID    0   // 0-2, low to high
+#define REPORTER_QLEN   2   // allow space for both drivers to report
+#define DRIVER_1        0x01
+#define DRIVER_2        0x02
+// system_os_post(REPORTER_PID, driverID, driverStatus );
+
+static os_event_t       reporter_queue[user_procTaskQueueLen];
+static uint8_t          driverStatusMask = 0;
 
 MQTT_Client mqttClient;
 
@@ -61,14 +71,6 @@ wifiConnectCb(uint8_t status)
     if(status == STATION_GOT_IP){
         MQTT_Connect(&mqttClient);
         // The INFO message will be 'TCP: Connect to...'
-        //sntp_stop();
-        sntp_set_timezone(-7);
-        sntp_setservername(0, "us.pool.ntp.org"); // set server 0 by domain name
-        sntp_setservername(1, "ntp.sjtu.edu.cn"); // set server 1 by domain name
-        ipaddr_aton("210.72.145.44", addr);
-        sntp_setserver(2, addr); // set server 2 by IP address
-        sntp_init();
-        os_timer_arm(&sntp_timer, 1000, 1);
     }
     else
     {
@@ -104,11 +106,10 @@ mqttPublishedCb(uint32_t *args)
     char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
     uint32 usec = system_get_time();
 
-    INFO("ts=%d ds= %d, als=%d\r\n", current_stamp,
+    INFO("ds= %d, als=%d\r\n",
             ds18B20_is_complete(), als_is_complete());
 
-    if ((current_stamp != 0)
-            && (ds18B20_is_complete() == true)
+    if ((ds18B20_is_complete() == true)
             && (als_is_complete() == true)
        )
     {
@@ -199,37 +200,6 @@ user_deep_sleep(void)
 
     system_deep_sleep(DEEP_SLEEP_SECONDS * US_PER_SEC);
 }
-
-
-/*
- * getCurrentTime - record sntp time
- *
- * TODO: timestamp will eventually be read from the MQTT server and
- * then echo'd here. At least, I'm thinking that is faster
- * than using the SNTP functions.
- * For now, wait for a proper sntp value
- */
-static void ICACHE_FLASH_ATTR
-getCurrentTime(void)
-{
-    uint32 sntpTime = 0;
-    char *mBuf = (char*)os_zalloc(30);
-    char *tBuf = (char *)os_zalloc(strlen(sysCfg.device_id) + 40);
-
-    INFO("Checking time...\r\n");
-    sntpTime = sntp_get_current_timestamp();
-    if (sntpTime != 0)
-    {
-        INFO("Valid time\r\n");
-        os_sprintf(tBuf, "%s/timestamp", sysCfg.device_id);
-        os_sprintf(mBuf, "%s", sntp_get_real_time(sntpTime));
-        MQTT_Publish(&mqttClient, tBuf, mBuf, os_strlen(mBuf), 0, 1);
-        current_stamp = sntpTime;
-    }
-    INFO("Exit timecheck\r\n");
-
-} //end of getCurrentTime()
-
 
 /*
  * sys_init_complete - callback for sys_init_done
@@ -335,6 +305,45 @@ initSysCfg()
 
 
 /*
+ * reporter -  process to collect and send driver results
+ *
+ * Collect measurements from drivers and when all ready, send them to
+ * MQTT broker. Report message has the form:
+ *    deviceType,report_version,temperature,lightlevel,voltage,elapsedTime
+ *    deviceType = 1 (sensorNode with ds18b20 and isl29035)
+ *    version_version = 1
+ *       temperature: float, degC
+ *       lightlevel:  integer, 1/64 lux per count
+ *       voltage: float, volts
+ *       elapsedTime: float, seconds
+ */
+void ICACHE_FLASH_ATTR
+reporter(os_event_t *event) {
+    driverStatusMask |= (event->sig & 0xff);
+
+    if (driverStatusMask == (DRIVER_1 & DRIVER_2)) {
+        // measurements complete, report
+        report_t *driver1 = ds18b20_report();
+        report_t *driver2 = als_report();
+        uint8_t buflen = driver1->len + driver2->len + 1 + SPACE4LOCAL_REPORTS;
+        char *mBuf = (char*)os_zalloc(bufLen);
+
+        // DeviceID and application version
+        (void)strcpy(mBuf, ID_VERSION_STR);
+        (void)strcat(mBuf,",");
+        (void)strcat(mBuf,driver1->buffer);
+        (void)strcat(mBuf,",");
+        (void)strcat(mBuf,driver2->buffer);
+        (void)strcat(mBuf,",");
+        // voltage
+        (void)strcat(mBuf,",");
+        // elapsed time
+    }
+    return;
+} // end reporter()
+
+
+/*
  * user_init - starting point for user code
  *
  * Initialize modules and callback. Use the sys_init_done callback
@@ -350,15 +359,18 @@ user_init()
     initSysCfg();
 
     INFO("%s\r\n", sysCfg.device_id);
-    ds18B20_init();
-    als_init();
 
+    // Initialize drivers
+    ds18B20_init(DRIVER_1);
+    als_init(DRIVER_2);
+
+    // setup timers and processes
     os_timer_disarm(&shutdown_timer);
     os_timer_setfn(&shutdown_timer, (os_timer_func_t *)user_deep_sleep, NULL);
 
-    os_timer_disarm(&sntp_timer);
-    os_timer_setfn(&sntp_timer, (os_timer_func_t *)getCurrentTime, NULL);
+    system_os_task(reporter, REPORTER_PID, reporter_queue, REPORTER_QLEN);
 
+    // Set callback to detect system initialization
     system_init_done_cb(sys_init_complete);
 
 } // end of user_init()
