@@ -42,7 +42,7 @@ static uint32 measurement_start_time;
 
 static uint32_t reportPID = 0;
 static uint32_t myid = 0;
-static report_t *myReport;
+static report_t *myReport = NULL;
 
 /*
  * report ds18b20 reading

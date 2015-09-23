@@ -30,7 +30,7 @@
 
 static uint32_t reportPID = 0;
 static uint32_t myid = 0;
-static report_t *myReport;
+static report_t *myReport = NULL;
 
 void ICACHE_FLASH_ATTR
 battery_init(uint32_t pid, uint32_t id)

@@ -46,7 +46,10 @@ newReport(uint8_t bsize) {
  */
 void ICACHE_FLASH_ATTR
 freeReport(report_t * report) {
-    os_free(report->buffer);
-    os_free(report);
+    if (report != NULL)
+    {
+        os_free(report->buffer);
+        os_free(report);
+    }
     return;
 } // end of freeReport()

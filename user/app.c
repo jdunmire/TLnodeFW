@@ -21,7 +21,7 @@
  *
  */
 
-//#define INFO //os_printf  // over-ride debug setting
+//#define INFO os_printf  // over-ride debug setting
 #include "debug.h"
 
 #include <ets_sys.h>
@@ -45,6 +45,7 @@
 #define US_PER_SEC 1000000
 
 static os_timer_t shutdown_timer;
+static os_timer_t watchdog_timer;
 
 #define REPORTER_PID    1   // 0-2, low to high, 0 used by MQTT
 #define REPORTER_QLEN   3   // allow space for all drivers to report
@@ -66,6 +67,7 @@ MQTT_Client mqttClient;
 void ICACHE_FLASH_ATTR
 wifiConnectCb(uint8_t status)
 {
+    INFO("wifiConnectCb\r\n");
     ip_addr_t *addr = (ip_addr_t *)os_zalloc(sizeof(ip_addr_t));
     if(status == STATION_GOT_IP){
         MQTT_Connect(&mqttClient);
@@ -77,6 +79,7 @@ wifiConnectCb(uint8_t status)
         // The INFO message will be 'Free memory'
     }
     os_free(addr);
+    INFO("wifiConnectCb exit\r\n");
 }
 
 
@@ -161,6 +164,7 @@ mqttDataCb(
 static void ICACHE_FLASH_ATTR
 user_deep_sleep(void)
 {
+    INFO("user_deep_sleep()\r\n");
     ds18B20_shutdown();
     als_shutdown();
     battery_shutdown();
@@ -181,17 +185,20 @@ user_deep_sleep(void)
 static void ICACHE_FLASH_ATTR
 sys_init_complete(void)
 {
+    INFO("sys_init_complete\r\n");
     // Setup Wifi connection and MQTT
     MQTT_InitConnection(&mqttClient, sysCfg.mqtt_host, sysCfg.mqtt_port,
            // sysCfg.security
            0 // 1 = SSL
             );
 
+    INFO("Got here\r\n");
     MQTT_OnConnected(&mqttClient, mqttConnectedCb);
     MQTT_OnDisconnected(&mqttClient, mqttDisconnectedCb);
     MQTT_OnPublished(&mqttClient, mqttPublishedCb);
     MQTT_OnData(&mqttClient, mqttDataCb);
 
+    INFO("Got here 2\r\n");
     // Setup MQTT handling process. The process will be signalled when
     // the WIFI connection is established.
     MQTT_InitClient(
@@ -203,6 +210,7 @@ sys_init_complete(void)
             1  // 1 = clean session
             );
 
+    INFO("Got here 3\r\n");
     // TODO: the LWT and status don't work the way I think, so 
     //       they are not persistant at this time. I'll fix them
     //       when I know more.
@@ -220,6 +228,7 @@ sys_init_complete(void)
     //        );
 
     WIFI_Connect(sysCfg.sta_ssid, sysCfg.sta_pwd, wifiConnectCb);
+    INFO("Got here 4\r\n");
 
     //dumpInfo();
 
@@ -358,6 +367,14 @@ user_init()
     // setup timers and processes
     os_timer_disarm(&shutdown_timer);
     os_timer_setfn(&shutdown_timer, (os_timer_func_t *)user_deep_sleep, NULL);
+
+
+    // watchdog shutdown in 10 seconds (10000 milli-seconds)
+    // This limits battery drain if the network or the MQTT server is
+    // not available.
+    os_timer_disarm(&watchdog_timer);
+    os_timer_setfn(&watchdog_timer, (os_timer_func_t *)user_deep_sleep, NULL);
+    os_timer_arm(&watchdog_timer, 10000, 0);
 
     system_os_task(reporter, REPORTER_PID, reporter_queue, REPORTER_QLEN);
 
