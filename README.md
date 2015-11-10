@@ -1,6 +1,6 @@
-sensorNode - Firmware for the RockingDLabs SensorNode
+TLnodeFW - Firmware for the RockingDLabs TLnode
 =====================================================
-An application to run on the sensorNode hardware and report sensor
+An application to run on the TLnode hardware and report sensor
 values to an MQTT server.
 
 
@@ -22,12 +22,17 @@ Prerequisits for build
 ----------------------
   * https://github.com/pfalcon/esp-open-sdk
   * ESP SDK v1.3.0 (automatically installed by `esp-open-sdk`
+  * A copy of [esp_mqtt](https://github.com/tuanpmt/esp_mqtt) in the
+    `modules/esp_mqtt/` directory. (Working code was built with
+    commit #7247e3f of that project.)
 
 
 Build and Install
 ----------------------
   * Copy `paths.tmpl` to `paths.inc`.
   * Adjust the paths in `paths.inc` for your setup.
+  * Copy `include/mqtt_config.tmpl` to `include/mqtt_config.h`.
+  * Adjust the settings in `include/mqtt_config.h` to match your network.
   * Build:
 
         $ make
@@ -35,6 +40,7 @@ Build and Install
   * Install (put your target system in bootloader mode first):
 
         $ make flash
+
 
 Key files
 ------------------------
@@ -55,6 +61,16 @@ Key files
 
   * include/ - application header files
 
+  * include/mqtt_config.tmpl - Configuration of the MQTT network
+
+      __DO NOT MODIFY include/mqtt_config.tmpl__ Copy it to
+      `include/mqtt_config.h` and make your
+      changes there. `include/mqtt_config.h` is listed in
+      `include/.gitignore` so that it will not get committed. This both
+      protects you from inadvertentely sharing information about your
+      network when you share your git archive and prevents _dualing
+      commits_.
+
   * include/drivers - header files for drivers
       - header files for the uart driver are here
 
@@ -66,22 +82,22 @@ Key files
 License
 -------
 Copyright 2015 Jerry Dunmire
-This file is part of sensorNode
+This file is part of TLnodeFW
 
-sensorNode is free software: you can redistribute it and/or modify
+TLnodeFW is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
 the Free Software Foundation, either version 2 of the License, or
 (at your option) any later version.
 
-sensorNode is distributed in the hope that it will be useful,
+TLnodeFW is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
-along with sensorNode.  If not, see <http://www.gnu.org/licenses/>.
+along with TLnodeFW.  If not, see <http://www.gnu.org/licenses/>.
 
-Files that are not part of sensorNode are clearly identified at the top
+Files that are not part of TLnodeFW are clearly identified at the top
 of each of the files. These files are distributed under terms noted in each
 of the files.
 
